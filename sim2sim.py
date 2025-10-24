@@ -12,6 +12,8 @@ import numpy as np
 import torch
 from scipy.spatial.transform import Rotation as R
 
+from base_pose_estimator import BasePoseEstimator
+
 
 def rotate_vector_by_quaternion(vector: np.ndarray, quaternion: np.ndarray) -> np.ndarray:
     '''
@@ -19,7 +21,7 @@ def rotate_vector_by_quaternion(vector: np.ndarray, quaternion: np.ndarray) -> n
 
     parameters:
         vector: np.ndarray, translation vector, [3]
-        quaternion: np.ndarray, rotation quaternion, [4]
+        quaternion: np.ndarray, rotation quaternion, [4], [w, x, y, z]
     
         returns:
             v: rotated vector, R @ t, [3]
@@ -41,7 +43,7 @@ def get_gravity_orientation(quaternion: np.ndarray) -> np.ndarray:
     get gravity orientation from quaternion
 
     parameters:
-        quaternion: [4]
+        quaternion: [4], [w, x, y, z]
     returns:
         v: gravitation orientation, [3]
     '''
@@ -90,6 +92,7 @@ def joint_torque(action, joint_pos_rel, joint_vel_rel):
                 stiffness: float = 50.0, 
                 damping: float = 0.5):
         '''
+        PD (proportion-difference) controller 
 
 
         parameters:
@@ -147,6 +150,11 @@ def mujoco2isaac(inputs: np.ndarray) -> np.ndarray:
     return inputs.reshape([4, 3]).T.flatten()
 
 
+
+
+
+
+
 def main():
     '''
     '''
@@ -168,8 +176,8 @@ def main():
         "cmd_scale": 1.0,
         "num_actions": 12,
         "num_obs": 48,
-        "cmd_init": [1.5, 0.0, 0.0], 
-        # 向前1.5m/s，没有横向和旋转速度
+        "cmd_init": [0.5, 0.0, 2.0], 
+        # 前向速度、横向速度、转向速度. 向前1.5m/s，没有横向和旋转速度
     }
 
     policy_path = config["policy_path"]
@@ -181,6 +189,8 @@ def main():
 
     viewer = mujoco.viewer.launch_passive(m, d)
     policy = torch.jit.load(policy_path)
+
+    estimator = BasePoseEstimator(m)
 
     default_angles = np.array(config["default_angles"], dtype=np.float32)
     # [12]
@@ -218,9 +228,13 @@ def main():
         # 定期更新策略（每10步）
         if counter % config["control_decimation"] == 0:
             qj = d.qpos[7:]
+            # [12]
             dqj = d.qvel[6:]
+            # [12]
             quat = d.qpos[3:7]
+            # [4]
             omega = d.qvel[3:6]
+            # [3]
 
             qj = (qj - default_angles) * config["dof_pos_scale"]
             dqj = dqj * config["dof_vel_scale"]
@@ -253,6 +267,28 @@ def main():
 
             # 更新目标关节位置
             target_dof_pos = action * config["action_scale"] + default_angles
+            
+        if counter % 200 == 0:
+            # pos and pose estimation
+            foot_pos = estimator.get_foot_pos_from_data(d)
+            joint_angles = d.qpos[7:(7 + 12)].copy()
+            base_pos_gt = d.qpos[:3].copy()
+            base_quat_gt = d.qpos[3:7].copy()
+            base_rot_mat = R.from_quat(base_quat_gt).as_matrix()
+
+            base_pos_est1, base_pos_est_var1 = estimator(foot_pos, joint_angles, base_quat_gt)
+            (base_pos_est2, base_pos_est_var2), base_rot_mat_est = estimator(foot_pos, joint_angles)
+
+            base_pos_err1 = np.sum((base_pos_est1 - base_pos_gt) ** 2)
+            base_pos_err2 = np.sum((base_pos_est2 - base_pos_gt) ** 2)
+            rot_err = np.arccos((np.trace(base_rot_mat @ base_rot_mat_est.T) - 1) / 2)
+            
+            print(f"known base_quat: pos err = {base_pos_err1:.2e}"
+                  f", pos var = {base_pos_est_var1:.2e}"
+                  "\n"
+                  f"unknown base_quat: pos err = {base_pos_err2:.2e}"
+                  f", pos var = {base_pos_est_var2:.2e}, "
+                  f"rot err = {rot_err:.2e} rad\n")
 
         viewer.sync()
         time_until_next_step = m.opt.timestep - (time.time() - step_start)
@@ -263,3 +299,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
