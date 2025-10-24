@@ -59,14 +59,7 @@ class BasePoseEstimator:
         # set the robot state according to data
         mujoco.mj_kinematics(self.model, data)
         
-        foot_pos = self.get_foot_pos_from_data(data)
-        
-        # reset
-        # data.qpos[:3] = 0
-        # data.qpos[3:7] = np.array([1, 0, 0, 0])
-        # data.qpos[7:] = 0
-        # mujoco.mj_kinematics(self.model, data)
-
+        foot_pos = self.get_foot_pos_from_data(data)        
         return foot_pos
     
     def get_foot_pos_from_data(self, data):
@@ -120,8 +113,8 @@ class BasePoseEstimator:
                                                     joint_angles = joint_angles)
             base_pos_arr = foot_pos - foot_pos_base
             base_pos_est = np.mean(base_pos_arr, axis = 0)
-            base_pos_est_err = np.mean(np.sum((base_pos_arr - base_pos_est) ** 2, axis = 1))
-            return base_pos_est, base_pos_est_err
+            base_pos_est_var = np.mean(np.sum((base_pos_arr - base_pos_est) ** 2, axis = 1))
+            return base_pos_est, base_pos_est_var
         else:
             base_quat0 = np.array([1, 0, 0, 0])
             foot_pos_base = self.forward_kinematics(base_pos = base_pos0, 
@@ -141,9 +134,9 @@ class BasePoseEstimator:
 
             base_pos_arr = foot_pos - foot_pos_base @ R
             base_pos_est = np.mean(base_pos_arr, axis = 0)
-            base_pos_est_err = np.mean(np.sum((base_pos_arr - base_pos_est) ** 2, axis = 1))
+            base_pos_est_var = np.mean(np.sum((base_pos_arr - base_pos_est) ** 2, axis = 1))
             # return (base_pos_est, base_pos_est_err), base_quat_est
-            return (base_pos_est, base_pos_est_err), R
+            return (base_pos_est, base_pos_est_var), R
 
 
 def compute_dist_mat(x1: np.ndarray, x2: np.ndarray):

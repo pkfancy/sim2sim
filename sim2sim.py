@@ -13,6 +13,7 @@ import torch
 from scipy.spatial.transform import Rotation as R
 
 from base_pose_estimator import BasePoseEstimator
+from velocity_estimator import VelocityEstimator
 
 
 def rotate_vector_by_quaternion(vector: np.ndarray, quaternion: np.ndarray) -> np.ndarray:
@@ -191,6 +192,7 @@ def main():
     policy = torch.jit.load(policy_path)
 
     estimator = BasePoseEstimator(m)
+    vel_estimator = VelocityEstimator(m)
 
     default_angles = np.array(config["default_angles"], dtype=np.float32)
     # [12]
@@ -282,14 +284,33 @@ def main():
             base_pos_err1 = np.sum((base_pos_est1 - base_pos_gt) ** 2)
             base_pos_err2 = np.sum((base_pos_est2 - base_pos_gt) ** 2)
             rot_err = np.arccos((np.trace(base_rot_mat @ base_rot_mat_est.T) - 1) / 2)
+
+            # velocity estimation
+            base_angle_vel = d.qvel[3:6].copy()
+            base_vel_gt = d.qvel[:3].copy()
+            joint_vel = d.qvel[6:(6 + 12)].copy()
+            base_vel_est, base_vel_est_var = vel_estimator(base_pos_gt, 
+                                                           base_quat_gt, 
+                                                           base_angle_vel, 
+                                                           joint_angles, 
+                                                           joint_vel, 
+                                                           foot_pos)
+            base_vel_err = np.sum((base_vel_est - base_vel_gt) ** 2)
+            
             
             print(f"known base_quat: pos err = {base_pos_err1:.2e}"
                   f", pos var = {base_pos_est_var1:.2e}"
                   "\n"
                   f"unknown base_quat: pos err = {base_pos_err2:.2e}"
                   f", pos var = {base_pos_est_var2:.2e}, "
-                  f"rot err = {rot_err:.2e} rad\n")
-
+                  f"rot err = {rot_err:.2e} rad\n"
+                  f"vel err = {base_vel_err:.2e}"
+                  f", vel var = {base_vel_est_var:.2e}"
+                  f"\n"
+                  )
+        
+        # foot_pos = estimator.get_foot_pos_from_data(d)
+        # print(foot_pos)
         viewer.sync()
         time_until_next_step = m.opt.timestep - (time.time() - step_start)
         if time_until_next_step > 0:
